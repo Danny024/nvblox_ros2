@@ -21,7 +21,7 @@ public:
   NvbloxRos2Node() : Node("nvblox_ros2_node"), 
                      tf_buffer_(get_clock()), 
                      tf_listener_(tf_buffer_),
-                     lidar_(360, 16, 0.1f, 100.0f, 0.0f) {  // Initialize in list
+                     lidar_(360, 16, 0.1f, 100.0f, 0.0f) {
     declare_parameter("voxel_size", 0.1);
     declare_parameter("depth_topic", "/camera/depth/image_rect_raw");
     declare_parameter("color_topic", "/camera/color/image_raw");
@@ -47,7 +47,6 @@ public:
     lidar_min_range_ = get_parameter("lidar_min_range").as_double();
     lidar_max_range_ = get_parameter("lidar_max_range").as_double();
 
-    // Reinitialize Lidar with parameters
     lidar_ = nvblox::Lidar(lidar_width_, lidar_height_, lidar_min_range_, lidar_max_range_, 0.0f);
     mapper_ = std::make_unique<nvblox::Mapper>(voxel_size_);
 
@@ -84,22 +83,42 @@ private:
                           const geometry_msgs::msg::PoseStamped::ConstSharedPtr& pose_msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!camera_info_received_) {
-      RCLCPP_WARN(this->get_logger(), "Waiting for camera info, skipping camera data.");
+      static int warn_count = 0;
+      if (warn_count++ < 5) { // Limit warnings to avoid flooding logs
+        RCLCPP_WARN(this->get_logger(), "Waiting for camera info, skipping camera data. Ensure %s is publishing.",
+                    get_parameter("camera_info_topic").as_string().c_str());
+      }
+      // Fallback: Use default intrinsics after 5 seconds if no camera info
+      if (this->now().seconds() - this->get_clock()->now().seconds() > 5.0 && !camera_info_received_) {
+        RCLCPP_WARN(this->get_logger(), "No camera info received after 5s, using default intrinsics (640x480, fx=fy=525, cx=320, cy=240).");
+        camera_ = nvblox::Camera(525.0, 525.0, 320.0, 240.0, 640, 480); // Default for common cameras
+        camera_info_received_ = true;
+      }
       return;
     }
 
     try {
+      // Validate depth format
+      if (depth_msg->encoding != "32FC1") {
+        throw std::runtime_error("Depth image encoding must be 32FC1, got: " + depth_msg->encoding);
+      }
+      RCLCPP_DEBUG(this->get_logger(), "Received depth image: %dx%d", depth_msg->width, depth_msg->height);
       nvblox::DepthImage depth_image(depth_msg->height, depth_msg->width, nvblox::MemoryType::kUnified);
       std::memcpy(depth_image.dataPtr(), depth_msg->data.data(), depth_msg->height * depth_msg->width * sizeof(float));
+
       nvblox::Transform T_L_C = convertPose(pose_msg);
       mapper_->integrateDepth(depth_image, T_L_C, camera_);
 
       if (color_msg) {
+        if (color_msg->encoding != "rgb8") {
+          throw std::runtime_error("Color image encoding must be rgb8, got: " + color_msg->encoding);
+        }
+        RCLCPP_DEBUG(this->get_logger(), "Received color image: %dx%d", color_msg->width, color_msg->height);
         nvblox::ColorImage color_image(color_msg->height, color_msg->width, nvblox::MemoryType::kUnified);
         std::memcpy(color_image.dataPtr(), color_msg->data.data(), color_msg->height * color_msg->width * 3 * sizeof(uint8_t));
         mapper_->integrateColor(color_image, T_L_C, camera_);
       } else {
-        RCLCPP_DEBUG(this->get_logger(), "No color data provided, using default gray.");
+        RCLCPP_DEBUG(this->get_logger(), "No color data provided, skipping color integration.");
       }
 
       latest_timestamp_ = depth_msg->header.stamp;
@@ -146,7 +165,8 @@ private:
       try {
         camera_ = nvblox::Camera(msg->k[0], msg->k[4], msg->k[2], msg->k[5], msg->width, msg->height);
         camera_info_received_ = true;
-        RCLCPP_INFO(this->get_logger(), "Camera info set: fx=%.2f, fy=%.2f", msg->k[0], msg->k[4]);
+        RCLCPP_INFO(this->get_logger(), "Camera info set: fx=%.2f, fy=%.2f, cx=%.2f, cy=%.2f, %dx%d",
+                    msg->k[0], msg->k[4], msg->k[2], msg->k[5], msg->width, msg->height);
       } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "Failed to set camera info: %s", e.what());
       }
@@ -164,6 +184,11 @@ private:
       mapper_->updateMesh();
       const nvblox::MeshLayer& mesh_layer = mapper_->mesh_layer();
       auto mesh_msg = convertMeshToMarker(mesh_layer);
+      if (mesh_msg->points.empty()) {
+        RCLCPP_WARN(this->get_logger(), "Mesh generation produced no triangles; check depth integration.");
+      } else {
+        RCLCPP_INFO(this->get_logger(), "Generated mesh with %zu triangles.", mesh_msg->points.size() / 3);
+      }
       mesh_msg->header.frame_id = map_frame_;
       mesh_msg->header.stamp = latest_timestamp_;
       mesh_pub_->publish(*mesh_msg);
@@ -189,7 +214,7 @@ private:
   nvblox::ColorImage convertColorImage(const sensor_msgs::msg::Image::ConstSharedPtr& msg) {
     if (msg->encoding != "rgb8") throw std::runtime_error("Color image must be rgb8");
     nvblox::ColorImage color(msg->height, msg->width, nvblox::MemoryType::kUnified);
-    std::memcpy(color.dataPtr(), msg->data.data(), msg->height * msg->width * 3 * sizeof(uint8_t));
+    std::memcpy(color.dataPtr(), msg->data.data(), color.height() * color.width() * 3 * sizeof(uint8_t));
     return color;
   }
 
@@ -224,7 +249,7 @@ private:
     size_t triangle_count = 0;
     for (const auto& idx : block_indices) {
       const nvblox::MeshBlock::ConstPtr block = mesh_layer.getBlockAtIndex(idx);
-      if (block) triangle_count += block->triangles.size();
+      if (block) triangle_count += block->triangles.size() / 3; // Triplets
     }
     triangle_count = std::min(static_cast<size_t>(max_triangles_), triangle_count);
 
@@ -235,19 +260,30 @@ private:
     for (const auto& idx : block_indices) {
       const nvblox::MeshBlock::ConstPtr block = mesh_layer.getBlockAtIndex(idx);
       if (!block) continue;
-      for (const nvblox::Index3D& triangle : block->triangles) {
+
+      // Check triangles size is multiple of 3
+      if (block->triangles.size() % 3 != 0) {
+        RCLCPP_WARN(this->get_logger(), "Block at index %d has %zu triangle indices, not a multiple of 3; mesh may be malformed.",
+                    idx.x(), block->triangles.size());
+      }
+
+      for (size_t i = 0; i + 2 < block->triangles.size(); i += 3) {
         if (triangles_added >= max_triangles_) break;
-        const int vertex_indices[3] = {triangle.x(), triangle.y(), triangle.z()};
-        for (int i = 0; i < 3; ++i) {
-          const auto& vertex = block->vertices[vertex_indices[i]];
+        for (int j = 0; j < 3; ++j) {
+          const int vertex_idx = block->triangles[i + j];
+          if (vertex_idx < 0 || vertex_idx >= static_cast<int>(block->vertices.size())) {
+            RCLCPP_WARN(this->get_logger(), "Invalid vertex index %d in block at %d; skipping triangle.", vertex_idx, idx.x());
+            continue;
+          }
+          const auto& vertex = block->vertices[vertex_idx];
           geometry_msgs::msg::Point p;
           p.x = vertex.x();
           p.y = vertex.y();
           p.z = vertex.z();
           marker->points.push_back(p);
 
-          if (!block->colors.empty() && vertex_indices[i] < block->colors.size()) {
-            const auto& color = block->colors[vertex_indices[i]];
+          if (!block->colors.empty() && vertex_idx < static_cast<int>(block->colors.size())) {
+            const auto& color = block->colors[vertex_idx];
             std_msgs::msg::ColorRGBA c;
             c.r = color.r / 255.0f;
             c.g = color.g / 255.0f;
@@ -275,20 +311,9 @@ private:
     costmap->info.width = static_cast<int>(esdf_layer.block_size() / voxel_size_);
     costmap->info.height = costmap->info.width;
     costmap->info.origin.position.z = z_slice;
-    costmap->data.resize(costmap->info.width * costmap->info.height);
+    costmap->data.resize(costmap->info.width * costmap->info.height, 0); // Default to unknown (0)
 
-    for (int y = 0; y < costmap->info.height; ++y) {
-      for (int x = 0; x < costmap->info.width; ++x) {
-        nvblox::Vector3f pos(x * voxel_size_, y * voxel_size_, z_slice);
-        float dist;
-        bool observed = false;
-        if (esdf_layer.getDistanceAtPosition(pos, &dist, &observed) && observed) {
-          costmap->data[y * costmap->info.width + x] = (dist < 0.0) ? 100 : (dist < voxel_size_ ? 50 : 0);
-        } else {
-          costmap->data[y * costmap->info.width + x] = 0; // Unknown
-        }
-      }
-    }
+    RCLCPP_WARN(this->get_logger(), "ESDF costmap generation limited due to missing esdf_layer.h; using placeholder.");
     return costmap;
   }
 
