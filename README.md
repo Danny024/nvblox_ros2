@@ -25,7 +25,7 @@
    ```bash
    mkdir -p ~/ros2_ws/src
    cd ~/ros2_ws
-   git clone <repository_url> src/nvblox_ros2
+   git clone https://github.com/Danny024/nvblox_ros2.git src/nvblox_ros2
    cd src/nvblox_ros2
    git submodule update --init --recursive
    sudo apt update
