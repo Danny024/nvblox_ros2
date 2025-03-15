@@ -43,43 +43,47 @@
    
 ## Configuration Parameters
 ```
-voxel_size (default: 0.1): Voxel size in meters for the TSDF grid.
-depth_topic (default: /camera/depth/image_rect_raw): Source of depth images (32FC1 encoding).
-color_topic (default: /camera/color/image_raw): Optional source of color images (rgb8 encoding).
-pose_topic (default: /camera/pose): Camera pose data.
-camera_info_topic (default: /camera/depth/camera_info): Camera intrinsics data.
-map_frame (default: map): Reference frame for mesh and costmap output.
-max_triangles (default: 10000): Maximum number of triangles in the mesh.
+`voxel_size` (default: 0.1): Voxel size in meters for the TSDF grid.
+`depth_topic` (default: **/camera/depth/image_rect_raw**): Source of depth images (32FC1 encoding).
+`color_topic` (default: **/camera/color/image_raw**): Optional source of color images (rgb8 encoding).
+`pose_topic` (default: /camera/pose): Camera pose data.
+`camera_info_topic` (default: **/camera/depth/camera_info**): Camera intrinsics data.
+`map_frame` (default: **map**): Reference frame for mesh and costmap output.
+`max_triangles` (default: 10000): Maximum number of triangles in the mesh.
 ```
 
 ### Subscribed Topics
 ```
-Depth Image (sensor_msgs/Image):
+`Depth Image` (sensor_msgs/Image):
 Default: /camera/depth/image_rect_raw
 Encoding: 32FC1
 Parameter: depth_topic
 Description: Depth data in meters for 3D mapping.
-Color Image (sensor_msgs/Image):
+
+`Color Image` (sensor_msgs/Image):
 Default: /camera/color/image_raw
 Encoding: rgb8
 Parameter: color_topic
 Description: Optional RGB data for mesh coloring.
-Camera Pose (geometry_msgs/PoseStamped):
+
+`Camera Pose` (geometry_msgs/PoseStamped):
 Default: /camera/pose
 Parameter: pose_topic
 Description: Camera pose in the map_frame.
-Camera Info (sensor_msgs/CameraInfo):
+
+`Camera Info` (sensor_msgs/CameraInfo):
 Default: /camera/depth/camera_info
 Parameter: camera_info_topic
 Description: Camera intrinsics, required once for initialization.
 ```
 ### Published Topics
 ```
-3D Mesh (visualization_msgs/Marker):
+`3D Mesh` (visualization_msgs/Marker):
 Topic: /nvblox/mesh
 Frame: map_frame (default: map)
 Description: Triangular mesh with per-vertex colors if color data is provided.
-2D Costmap (nav_msgs/OccupancyGrid):
+
+`2D Costmap` (nav_msgs/OccupancyGrid):
 Topic: /nvblox/costmap
 Frame: map_frame (default: map)
 Description: Placeholder ESDF slice at z=0 (all zeros) due to missing esdf_layer.h.
