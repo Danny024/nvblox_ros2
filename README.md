@@ -41,7 +41,7 @@
    ros2 launch nvblox_ros2 nvblox_camera.launch.py
    ros2 run rviz2 rviz2
    
-##Configuration Parameters
+## Configuration Parameters
 ```
 voxel_size (default: 0.1): Voxel size in meters for the TSDF grid.
 depth_topic (default: /camera/depth/image_rect_raw): Source of depth images (32FC1 encoding).
