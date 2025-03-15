@@ -54,37 +54,47 @@
 ## Subscribed Topics
 
 **Depth Image** (sensor_msgs/Image):
+```
 Default: /camera/depth/image_rect_raw
 Encoding: 32FC1
 Parameter: depth_topic
 Description: Depth data in meters for 3D mapping.
-
+```
 **Color Image** (sensor_msgs/Image):
+```
 Default: /camera/color/image_raw
 Encoding: rgb8
 Parameter: color_topic
 Description: Optional RGB data for mesh coloring.
+```
 
 **Camera Pose** (geometry_msgs/PoseStamped):
+```
 Default: /camera/pose
 Parameter: pose_topic
 Description: Camera pose in the map_frame.
+```
 
 **Camera Info** (sensor_msgs/CameraInfo):
+```
 Default: /camera/depth/camera_info
 Parameter: camera_info_topic
 Description: Camera intrinsics, required once for initialization.
+```
 
 ### Published Topics
 `
 **3D Mesh** (visualization_msgs/Marker):
+```
 Topic: /nvblox/mesh
 Frame: map_frame (default: map)
 Description: Triangular mesh with per-vertex colors if color data is provided.
+```
 
 **2D Costmap** (nav_msgs/OccupancyGrid):
+```
 Topic: /nvblox/costmap
 Frame: map_frame (default: map)
 Description: Placeholder ESDF slice at z=0 (all zeros) due to missing esdf_layer.h.
-
+```
 
