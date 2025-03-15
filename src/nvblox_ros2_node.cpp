@@ -4,7 +4,6 @@
 #include <message_filters/sync_policies/approximate_time.h>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
-#include <sensor_msgs/point_cloud2_iterator.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <visualization_msgs/msg/marker.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -20,34 +19,19 @@ class NvbloxRos2Node : public rclcpp::Node {
 public:
   NvbloxRos2Node() : Node("nvblox_ros2_node"), 
                      tf_buffer_(get_clock()), 
-                     tf_listener_(tf_buffer_),
-                     lidar_(360, 16, 0.1f, 100.0f, 0.0f) {
+                     tf_listener_(tf_buffer_) {
     declare_parameter("voxel_size", 0.1);
     declare_parameter("depth_topic", "/camera/depth/image_rect_raw");
     declare_parameter("color_topic", "/camera/color/image_raw");
     declare_parameter("pose_topic", "/camera/pose");
     declare_parameter("camera_info_topic", "/camera/depth/camera_info");
-    declare_parameter("lidar_topic", "/lidar/points");
     declare_parameter("map_frame", "map");
     declare_parameter("max_triangles", 10000);
-    declare_parameter("lidar_width", 360);
-    declare_parameter("lidar_height", 16);
-    declare_parameter("lidar_min_angle", -M_PI);
-    declare_parameter("lidar_max_angle", M_PI);
-    declare_parameter("lidar_min_range", 0.1);
-    declare_parameter("lidar_max_range", 100.0);
 
     voxel_size_ = get_parameter("voxel_size").as_double();
     map_frame_ = get_parameter("map_frame").as_string();
     max_triangles_ = get_parameter("max_triangles").as_int();
-    lidar_width_ = get_parameter("lidar_width").as_int();
-    lidar_height_ = get_parameter("lidar_height").as_int();
-    lidar_min_angle_ = get_parameter("lidar_min_angle").as_double();
-    lidar_max_angle_ = get_parameter("lidar_max_angle").as_double();
-    lidar_min_range_ = get_parameter("lidar_min_range").as_double();
-    lidar_max_range_ = get_parameter("lidar_max_range").as_double();
 
-    lidar_ = nvblox::Lidar(lidar_width_, lidar_height_, lidar_min_range_, lidar_max_range_, 0.0f);
     mapper_ = std::make_unique<nvblox::Mapper>(voxel_size_);
 
     depth_sub_.subscribe(this, get_parameter("depth_topic").as_string());
@@ -58,9 +42,6 @@ public:
     sync_->registerCallback(std::bind(&NvbloxRos2Node::cameraSyncCallback, this,
                                       std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
-    lidar_sub_ = create_subscription<sensor_msgs::msg::PointCloud2>(
-        get_parameter("lidar_topic").as_string(), 10,
-        std::bind(&NvbloxRos2Node::lidarCallback, this, std::placeholders::_1));
     camera_info_sub_ = create_subscription<sensor_msgs::msg::CameraInfo>(
         get_parameter("camera_info_topic").as_string(), 10,
         std::bind(&NvbloxRos2Node::cameraInfoCallback, this, std::placeholders::_1));
@@ -84,21 +65,19 @@ private:
     std::lock_guard<std::mutex> lock(mutex_);
     if (!camera_info_received_) {
       static int warn_count = 0;
-      if (warn_count++ < 5) { // Limit warnings to avoid flooding logs
+      if (warn_count++ < 5) {
         RCLCPP_WARN(this->get_logger(), "Waiting for camera info, skipping camera data. Ensure %s is publishing.",
                     get_parameter("camera_info_topic").as_string().c_str());
       }
-      // Fallback: Use default intrinsics after 5 seconds if no camera info
       if (this->now().seconds() - this->get_clock()->now().seconds() > 5.0 && !camera_info_received_) {
-        RCLCPP_WARN(this->get_logger(), "No camera info received after 5s, using default intrinsics (640x480, fx=fy=525, cx=320, cy=240).");
-        camera_ = nvblox::Camera(525.0, 525.0, 320.0, 240.0, 640, 480); // Default for common cameras
+        RCLCPP_WARN(this->get_logger(), "No camera info after 5s, using default intrinsics (640x480, fx=fy=525, cx=320, cy=240).");
+        camera_ = nvblox::Camera(525.0, 525.0, 320.0, 240.0, 640, 480);
         camera_info_received_ = true;
       }
       return;
     }
 
     try {
-      // Validate depth format
       if (depth_msg->encoding != "32FC1") {
         throw std::runtime_error("Depth image encoding must be 32FC1, got: " + depth_msg->encoding);
       }
@@ -125,37 +104,6 @@ private:
       latest_frame_ = depth_msg->header.frame_id;
     } catch (const std::exception& e) {
       RCLCPP_ERROR(this->get_logger(), "Failed to process camera data: %s", e.what());
-    }
-  }
-
-  void lidarCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr& msg) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    try {
-      nvblox::DepthImage depth_image(lidar_height_, lidar_width_, nvblox::MemoryType::kUnified);
-      std::memset(depth_image.dataPtr(), 0, lidar_height_ * lidar_width_ * sizeof(float));
-
-      sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"), iter_z(*msg, "z");
-      for (; iter_x != iter_x.end(); ++iter_x, ++iter_y, ++iter_z) {
-        float x = *iter_x, y = *iter_y, z = *iter_z;
-        float range = std::sqrt(x * x + y * y + z * z);
-        float theta = std::atan2(y, x);  // Azimuth angle
-        float phi = std::acos(z / range);  // Elevation angle
-
-        int u = static_cast<int>((theta - lidar_min_angle_) / (lidar_max_angle_ - lidar_min_angle_) * lidar_width_);
-        int v = static_cast<int>((phi / M_PI) * lidar_height_);
-
-        if (u >= 0 && u < lidar_width_ && v >= 0 && v < lidar_height_) {
-          depth_image(v, u) = range;
-        }
-      }
-
-      nvblox::Transform T_L_S = lookupTransform(msg->header.frame_id, map_frame_, msg->header.stamp);
-      mapper_->integrateLidarDepth(depth_image, T_L_S, lidar_);
-
-      latest_timestamp_ = msg->header.stamp;
-      latest_frame_ = msg->header.frame_id;
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(this->get_logger(), "Failed to process LiDAR data: %s", e.what());
     }
   }
 
@@ -249,7 +197,7 @@ private:
     size_t triangle_count = 0;
     for (const auto& idx : block_indices) {
       const nvblox::MeshBlock::ConstPtr block = mesh_layer.getBlockAtIndex(idx);
-      if (block) triangle_count += block->triangles.size() / 3; // Triplets
+      if (block) triangle_count += block->triangles.size() / 3;
     }
     triangle_count = std::min(static_cast<size_t>(max_triangles_), triangle_count);
 
@@ -261,7 +209,6 @@ private:
       const nvblox::MeshBlock::ConstPtr block = mesh_layer.getBlockAtIndex(idx);
       if (!block) continue;
 
-      // Check triangles size is multiple of 3
       if (block->triangles.size() % 3 != 0) {
         RCLCPP_WARN(this->get_logger(), "Block at index %d has %zu triangle indices, not a multiple of 3; mesh may be malformed.",
                     idx.x(), block->triangles.size());
@@ -311,7 +258,7 @@ private:
     costmap->info.width = static_cast<int>(esdf_layer.block_size() / voxel_size_);
     costmap->info.height = costmap->info.width;
     costmap->info.origin.position.z = z_slice;
-    costmap->data.resize(costmap->info.width * costmap->info.height, 0); // Default to unknown (0)
+    costmap->data.resize(costmap->info.width * costmap->info.height, 0);
 
     RCLCPP_WARN(this->get_logger(), "ESDF costmap generation limited due to missing esdf_layer.h; using placeholder.");
     return costmap;
@@ -321,7 +268,6 @@ private:
   message_filters::Subscriber<sensor_msgs::msg::Image> depth_sub_, color_sub_;
   message_filters::Subscriber<geometry_msgs::msg::PoseStamped> pose_sub_;
   std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
-  rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr lidar_sub_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_sub_;
   rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr mesh_pub_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr costmap_pub_;
@@ -336,13 +282,6 @@ private:
   rclcpp::Time latest_timestamp_{0, 0, RCL_ROS_TIME};
   int max_triangles_;
   nvblox::Camera camera_;
-  nvblox::Lidar lidar_;
-  int lidar_width_;
-  int lidar_height_;
-  double lidar_min_angle_;
-  double lidar_max_angle_;
-  double lidar_min_range_;
-  double lidar_max_range_;
 };
 
 int main(int argc, char* argv[]) {
