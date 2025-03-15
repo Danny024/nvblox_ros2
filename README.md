@@ -42,13 +42,27 @@
    ros2 run rviz2 rviz2
    
 ## Configuration Parameters
- **voxel_size** (default: 0.1): Voxel size in meters for the TSDF grid.
-`**depth_topic**  (default: **/camera/depth/image_rect_raw**): Source of depth images (32FC1 encoding).
-**color_topic** (default: **/camera/color/image_raw**): Optional source of color images (rgb8 encoding).
-**pose_topic** (default: /camera/pose): Camera pose data.
-**camera_info_topic** (default: **/camera/depth/camera_info**): Camera intrinsics data.
-**map_frame** (default: **map**): Reference frame for mesh and costmap output.
-**max_triangles** (default: 10000): Maximum number of triangles in the mesh.
+
+**voxel_size** 
+```(default: 0.1): Voxel size in meters for the TSDF grid.```
+
+**depth_topic**  
+```(default: **/camera/depth/image_rect_raw**): Source of depth images (32FC1 encoding).```
+
+**color_topic** 
+```(default: **/camera/color/image_raw**): Optional source of color images (rgb8 encoding).```
+
+**pose_topic** 
+(default: /camera/pose): Camera pose data.
+
+**camera_info_topic** 
+```(default: **/camera/depth/camera_info**): Camera intrinsics data.```
+
+**map_frame** 
+```(default: **map**): Reference frame for mesh and costmap output.```
+
+**max_triangles** 
+```(default: 10000): Maximum number of triangles in the mesh.```
 
 
 ## Subscribed Topics
