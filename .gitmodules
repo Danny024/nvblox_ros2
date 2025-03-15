@@ -1,0 +1,3 @@
+[submodule "src/nvblox"]
+	path = src/nvblox
+	url = git@github.com:nvidia-isaac/nvblox.git
